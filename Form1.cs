@@ -1,6 +1,8 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using IWshRuntimeLibrary;
 using File = System.IO.File;
@@ -42,35 +44,98 @@ namespace LnkGen_Forms
 
         }
 
+        [DllImport("shell32.dll", EntryPoint = "ExtractIconEx", CharSet = CharSet.Auto)]
+        private static extern int ExtractIconEx(string lpszFile, int nIconIndex, IntPtr[] phiconLarge, IntPtr[] phiconSmall, int nIcons);
+
         private void BtnIconBrowser_Click(object sender, EventArgs e)
         {
             picbox.Visible = true;
-            OpenFileDialog iconDialog = new OpenFileDialog();
-            if (!Program.expertMode)
+            OpenFileDialog iconDialog = new OpenFileDialog
             {
-                iconDialog.Filter = "icon files (*.ico)|*.ico";
-            }
-            iconDialog.InitialDirectory = @"C:\";
-            iconDialog.DefaultExt = "ico";
-            iconDialog.Title = "Select lnk icon";
-            iconDialog.CheckFileExists = true;
+                Filter = "Icon files (*.ico;*.exe;*.dll)|*.ico;*.exe;*.dll",
+                InitialDirectory = @"C:\",
+                DefaultExt = "ico",
+                Title = "Select LNK Icon",
+                CheckFileExists = true
+            };
+
             if (iconDialog.ShowDialog() == DialogResult.OK)
             {
                 txtIcon.Text = iconDialog.FileName;
-                try
+                string selectedFile = iconDialog.FileName;
+
+                if (Path.GetExtension(selectedFile).Equals(".ico", StringComparison.OrdinalIgnoreCase))
                 {
-                    picbox.SizeMode = PictureBoxSizeMode.AutoSize;
-                    picbox.Image = Bitmap.FromHicon(new Icon(txtIcon.Text).Handle);
+                    // Directly load ICO files
+                    picbox.Image = new Icon(selectedFile).ToBitmap();
+                    return;
                 }
-                catch (Exception icoex)
+
+                // Extract all available icons from EXE/DLL
+                IntPtr[] largeIcons = new IntPtr[100]; // Buffer for up to 100 icons
+                int iconsExtracted = ExtractIconEx(selectedFile, 0, largeIcons, null, largeIcons.Length);
+
+                if (iconsExtracted > 0)
+                {
+                    // Show selection dialog
+                    int selectedIndex = ShowIconSelectionDialog(largeIcons, iconsExtracted);
+                    if (selectedIndex >= 0 && largeIcons[selectedIndex] != IntPtr.Zero)
+                    {
+                        Icon selectedIcon = Icon.FromHandle(largeIcons[selectedIndex]);
+                        picbox.Image = selectedIcon.ToBitmap();
+                        txtIcon.Text = $"{selectedFile},{selectedIndex}";
+                    }
+                }
+                else
                 {
                     picbox.Image = null;
                     picbox.Visible = false;
+                }
+            }
+        }
 
+        private int ShowIconSelectionDialog(IntPtr[] icons, int count)
+        {
+            using (Form iconForm = new Form())
+            {
+                iconForm.Text = "Select an Icon";
+                iconForm.Size = new Size(400, 300);
+                iconForm.StartPosition = FormStartPosition.CenterParent;
+
+                ListView iconListView = new ListView
+                {
+                    View = View.LargeIcon,
+                    Dock = DockStyle.Fill,
+                    MultiSelect = false
+                };
+
+                ImageList imgList = new ImageList { ImageSize = new Size(32, 32) };
+                for (int i = 0; i < count; i++)
+                {
+                    if (icons[i] != IntPtr.Zero)
+                    {
+                        Icon icon = Icon.FromHandle(icons[i]);
+                        imgList.Images.Add(icon);
+                    }
                 }
 
-                //ico doesnt always get drawn correctly so if ico does not get drawn, just dont show the preview.
+                iconListView.LargeImageList = imgList;
+                for (int i = 0; i < imgList.Images.Count; i++)
+                {
+                    iconListView.Items.Add(new ListViewItem { ImageIndex = i, Tag = i });
+                }
+
+                iconForm.Controls.Add(iconListView);
+                Button okButton = new Button { Text = "OK", Dock = DockStyle.Bottom };
+                okButton.Click += (s, e) => iconForm.DialogResult = DialogResult.OK;
+                iconForm.Controls.Add(okButton);
+
+                if (iconForm.ShowDialog() == DialogResult.OK && iconListView.SelectedItems.Count > 0)
+                {
+                    return (int)iconListView.SelectedItems[0].Tag;
+                }
             }
+            return -1; // No selection
         }
 
 
@@ -99,18 +164,6 @@ namespace LnkGen_Forms
             {
                 throw new Exception("target does not exist!");
             }
-
-            if (!File.Exists(txtIcon.Text))
-            {
-                throw new Exception("icon does not exist!");
-            }
-
-            if (!txtIcon.Text.EndsWith(".ico"))
-            {
-                throw new Exception("icon needs to be a .ico file");
-            }
-
-            //checks if a target and an icon are chosen and checks if the optional values make sense.
         }
 
 
